@@ -53,6 +53,7 @@ public class UICameraConfiguration {
     public double maxWhiteBalanceTemp;
     public PVCameraInfo matchedCameraInfo;
     public boolean mismatch;
+    public int fpsLimit;
 
     // Duplicate camera information
     public boolean isDuplicateCamera;
