@@ -67,9 +67,14 @@ export interface WebsocketCameraSettingsUpdate {
   minWhiteBalanceTemp: number;
   maxWhiteBalanceTemp: number;
   matchedCameraInfo: PVCameraInfo;
+  fpsLimit: number;
   isConnected: boolean;
   hasConnected: boolean;
   mismatch: boolean;
+  isDuplicateCamera?: boolean;
+  sourceUniqueName?: string;
+  sourceCameraNickname?: string;
+  inputSettingsReadOnly?: boolean;
 }
 export interface WebsocketNTUpdate {
   connected: boolean;

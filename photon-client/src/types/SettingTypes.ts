@@ -73,9 +73,9 @@ export type ConfigurableNetworkSettings = Omit<
 export interface PVCameraInfoBase {
   /*
   Huge hack. In Jackson, this is set based on the underlying type -- this
-  then maps to one of the 3 subclasses here below. Not sure how to best deal with this.
+  then maps to one of the subclasses here below. Not sure how to best deal with this.
   */
-  cameraTypename: "PVUsbCameraInfo" | "PVCSICameraInfo" | "PVFileCameraInfo";
+  cameraTypename: "PVUsbCameraInfo" | "PVCSICameraInfo" | "PVFileCameraInfo" | "PVDuplicateCameraInfo";
 }
 
 export interface PVUsbCameraInfo {
@@ -104,11 +104,20 @@ export interface PVFileCameraInfo {
   uniquePath: string;
 }
 
+export interface PVDuplicateCameraInfo {
+  sourceUniqueName: string;
+  displayName: string;
+
+  // In Java, PVCameraInfo provides a uniquePath property so we can have one Source of Truth here
+  uniquePath: string;
+}
+
 // This camera info will only ever hold one of its members - the others should be undefined.
 export class PVCameraInfo {
   PVUsbCameraInfo: PVUsbCameraInfo | undefined;
   PVCSICameraInfo: PVCSICameraInfo | undefined;
   PVFileCameraInfo: PVFileCameraInfo | undefined;
+  PVDuplicateCameraInfo: PVDuplicateCameraInfo | undefined;
 }
 
 export interface VsmState {
@@ -191,7 +200,7 @@ export interface BoardObservation {
   locationInImageSpace: CvPoint[];
   reprojectionErrors: CvPoint[];
   optimisedCameraToObject: Pose3d;
-  includeObservationInCalibration: boolean;
+  cornersUsed: boolean[];
   snapshotName: string;
   snapshotData: JsonImageMat;
 }
@@ -202,9 +211,15 @@ export interface CameraCalibrationResult {
   distCoeffs: JsonMatOfDouble;
   observations: BoardObservation[];
   calobjectWarp?: number[];
-  // We might have to omit observations for bandwidth, so backend will send us this
+  calobjectSize: { width: number; height: number };
+  calobjectSpacing: number;
+  lensModel: string;
+
+  // We have to omit observations for bandwidth, so backend will send us this from UICameraCalibrationCoefficients
   numSnapshots: number;
   meanErrors: number[];
+  numMissing: number[];
+  numOutliers: number[];
 }
 
 export enum ValidQuirks {
@@ -264,10 +279,17 @@ export interface UiCameraConfiguration {
   minWhiteBalanceTemp: number;
   maxWhiteBalanceTemp: number;
 
+  fpsLimit: number;
+
   matchedCameraInfo: PVCameraInfo;
   isConnected: boolean;
   hasConnected: boolean;
   mismatch: boolean;
+
+  isDuplicateCamera: boolean;
+  sourceUniqueName?: string;
+  sourceCameraNickname?: string;
+  inputSettingsReadOnly: boolean;
 }
 
 export interface CameraSettingsChangeRequest {
@@ -315,7 +337,7 @@ export const PlaceholderCameraSettings: UiCameraConfiguration = reactive({
         rows: 1,
         cols: 1,
         type: 1,
-        data: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        data: [600, 0, 1920 / 2, 0, 600, 1080 / 2, 0, 0, 1]
       },
       distCoeffs: {
         rows: 1,
@@ -325,28 +347,72 @@ export const PlaceholderCameraSettings: UiCameraConfiguration = reactive({
       },
       observations: [
         {
-          locationInImageSpace: [
-            { x: 100, y: 100 },
-            { x: 210, y: 100 },
-            { x: 320, y: 101 }
+          locationInObjectSpace: [
+            {
+              x: 0,
+              y: 0,
+              z: 0
+            },
+            {
+              x: 0.02539999969303608,
+              y: 0,
+              z: 0
+            },
+            {
+              x: 0.05079999938607216,
+              y: 0,
+              z: 0
+            }
           ],
-          locationInObjectSpace: [{ x: 0, y: 0, z: 0 }],
+          locationInImageSpace: [
+            {
+              x: 57.062007904052734,
+              y: 108.12601470947266
+            },
+            {
+              x: 108.72974395751953,
+              y: 108.0336685180664
+            },
+            {
+              x: 158.78118896484375,
+              y: 107.8104019165039
+            }
+          ],
           optimisedCameraToObject: {
-            translation: { x: 1, y: 2, z: 3 },
-            rotation: { quaternion: { W: 1, X: 0, Y: 0, Z: 0 } }
+            translation: {
+              x: -0.28942385915178886,
+              y: -0.12895727420625547,
+              z: 0.5933086404370699
+            },
+            rotation: {
+              quaternion: {
+                W: 0.9890028788589879,
+                X: -0.0507354429843431,
+                Y: -0.13458187019694584,
+                Z: -0.034452004994036174
+              }
+            }
           },
           reprojectionErrors: [
             { x: 1, y: 1 },
             { x: 2, y: 1 },
             { x: 3, y: 1 }
           ],
-          includeObservationInCalibration: false,
+          cornersUsed: [true, true, false],
           snapshotName: "img0.png",
           snapshotData: { rows: 480, cols: 640, type: CvType.CV_8U, data: "" }
         }
       ],
+      calobjectSize: {
+        width: 10,
+        height: 10
+      },
+      calobjectSpacing: 0.0254,
+      lensModel: "opencv8",
       numSnapshots: 1,
-      meanErrors: [123.45]
+      meanErrors: [123.45],
+      numMissing: [0],
+      numOutliers: [1]
     }
   ],
   pipelineNicknames: ["Placeholder Pipeline"],
@@ -387,11 +453,15 @@ export const PlaceholderCameraSettings: UiCameraConfiguration = reactive({
       uniquePath: "/dev/foobar2"
     },
     PVCSICameraInfo: undefined,
-    PVUsbCameraInfo: undefined
+    PVUsbCameraInfo: undefined,
+    PVDuplicateCameraInfo: undefined
   },
+  fpsLimit: -1,
   isConnected: true,
   hasConnected: true,
-  mismatch: false
+  mismatch: false,
+  isDuplicateCamera: false,
+  inputSettingsReadOnly: false
 });
 
 export enum CalibrationBoardTypes {

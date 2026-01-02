@@ -53,6 +53,13 @@ public class UICameraConfiguration {
     public double maxWhiteBalanceTemp;
     public PVCameraInfo matchedCameraInfo;
     public boolean mismatch;
+    public int fpsLimit;
+
+    // Duplicate camera information
+    public boolean isDuplicateCamera;
+    public String sourceUniqueName; // null if not duplicate
+    public String sourceCameraNickname; // null if not duplicate, for display
+    public boolean inputSettingsReadOnly; // true for duplicates
 
     // Status for if the underlying device is present and such
     public boolean isConnected;

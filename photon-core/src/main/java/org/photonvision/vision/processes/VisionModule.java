@@ -45,6 +45,7 @@ import org.photonvision.common.util.SerializationUtils;
 import org.photonvision.vision.calibration.CameraCalibrationCoefficients;
 import org.photonvision.vision.camera.CameraQuirk;
 import org.photonvision.vision.camera.CameraType;
+import org.photonvision.vision.camera.DuplicateVisionSource;
 import org.photonvision.vision.camera.QuirkyCamera;
 import org.photonvision.vision.camera.csi.LibcameraGpuSource;
 import org.photonvision.vision.frame.Frame;
@@ -86,6 +87,8 @@ public class VisionModule {
 
     private int inputStreamPort = -1;
     private int outputStreamPort = -1;
+
+    private int fpsLimit = -1;
 
     FileSaveFrameConsumer inputFrameSaver;
     FileSaveFrameConsumer outputFrameSaver;
@@ -134,7 +137,8 @@ public class VisionModule {
                         this.pipelineManager::getCurrentPipeline,
                         this::consumeResult,
                         this.cameraQuirks,
-                        getChangeSubscriber());
+                        getChangeSubscriber(),
+                        this::getFPSLimit);
         this.streamRunnable = new StreamRunnable(new OutputStreamPipeline());
         changeSubscriberHandle = DataChangeService.getInstance().addSubscriber(changeSubscriber);
 
@@ -148,7 +152,9 @@ public class VisionModule {
                         pipelineManager::getRequestedIndex,
                         this::setPipeline,
                         pipelineManager::getDriverMode,
-                        this::setDriverMode);
+                        this::setDriverMode,
+                        this::getFPSLimit,
+                        this::setFPSLimit);
         uiDataConsumer = new UIDataPublisher(visionSource.getSettables().getConfiguration().uniqueName);
         statusLEDsConsumer =
                 new StatusLEDConsumer(visionSource.getSettables().getConfiguration().uniqueName);
@@ -574,6 +580,8 @@ public class VisionModule {
 
         ret.mismatch = this.mismatch;
 
+        ret.fpsLimit = this.fpsLimit;
+
         // TODO refactor into helper method
         var temp = new HashMap<Integer, HashMap<String, Object>>();
         var videoModes = visionSource.getSettables().getAllVideoModes();
@@ -613,7 +621,43 @@ public class VisionModule {
         ret.isConnected = visionSource.getFrameProvider().isConnected();
         ret.hasConnected = visionSource.getFrameProvider().hasConnected();
 
+        // Set duplicate camera information
+        if (visionSource instanceof DuplicateVisionSource duplicateSource) {
+            ret.isDuplicateCamera = true;
+            ret.inputSettingsReadOnly = true;
+            var source = duplicateSource.getSourceVisionSource();
+            ret.sourceUniqueName = source.getCameraConfiguration().uniqueName;
+            ret.sourceCameraNickname = source.getCameraConfiguration().nickname;
+        } else {
+            ret.isDuplicateCamera = false;
+            ret.inputSettingsReadOnly = false;
+            ret.sourceUniqueName = null;
+            ret.sourceCameraNickname = null;
+        }
+
         return ret;
+    }
+
+    /**
+     * Set FPS limit for this vision module. This will cause our processing thread to sleep in order
+     * to increase our processing time to match the provided fps. If our processing time is longer
+     * than the frame period, the FPS limit will not be reached.
+     *
+     * @param fps
+     */
+    public void setFPSLimit(int fps) {
+        this.fpsLimit = fps;
+        saveAndBroadcastAll();
+    }
+
+    /**
+     * Get the current FPS limit for this vision module. This limit cannot be exceeded, but may be
+     * lower depending on processing time.
+     *
+     * @return the FPS limit
+     */
+    public int getFPSLimit() {
+        return fpsLimit;
     }
 
     public CameraConfiguration getStateAsCameraConfig() {

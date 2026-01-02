@@ -68,7 +68,6 @@ public class Server {
                                                             it.anyHost();
                                                         });
                                             }));
-
                             javalinConfig.requestLogger.http(
                                     (ctx, ms) -> {
                                         StringJoiner joiner =
@@ -129,6 +128,7 @@ public class Server {
         app.post("/api/settings/camera", RequestHandler::onCameraSettingsRequest);
         app.post("/api/settings/camera/setNickname", RequestHandler::onCameraNicknameChangeRequest);
         app.get("/api/settings/camera/getCalibImages", RequestHandler::onCameraCalibImagesRequest);
+        app.get("/api/settings/camera/getCalibration", RequestHandler::onCalibrationJsonRequest);
 
         // Utilities
         app.post("/api/utils/offlineUpdate", RequestHandler::onOfflineUpdateRequest);
@@ -143,6 +143,7 @@ public class Server {
         app.post("/api/utils/nukeOneCamera", RequestHandler::onNukeOneCamera);
         app.post("/api/utils/activateMatchedCamera", RequestHandler::onActivateMatchedCameraRequest);
         app.post("/api/utils/assignUnmatchedCamera", RequestHandler::onAssignUnmatchedCameraRequest);
+        app.post("/api/utils/duplicateCamera", RequestHandler::onDuplicateCameraRequest);
         app.post("/api/utils/unassignCamera", RequestHandler::onUnassignCameraRequest);
 
         // Calibration
