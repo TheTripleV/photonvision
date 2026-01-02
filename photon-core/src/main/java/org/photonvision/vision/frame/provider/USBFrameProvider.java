@@ -20,11 +20,9 @@ package org.photonvision.vision.frame.provider;
 import edu.wpi.first.cameraserver.CameraServer;
 import edu.wpi.first.cscore.CvSink;
 import edu.wpi.first.cscore.UsbCamera;
-import edu.wpi.first.networktables.BooleanSubscriber;
 import edu.wpi.first.util.PixelFormat;
 import edu.wpi.first.util.RawFrame;
 import org.opencv.core.Mat;
-import org.photonvision.common.dataflow.networktables.NetworkTablesManager;
 import org.photonvision.common.logging.LogGroup;
 import org.photonvision.common.logging.Logger;
 import org.photonvision.jni.CscoreExtras;
@@ -44,9 +42,6 @@ public class USBFrameProvider extends CpuImageProcessor {
 
     protected long lastTime = 0;
 
-    // subscribers are lightweight, and I'm lazy
-    protected final BooleanSubscriber useNewBehaviorSub;
-
     /**
      * Protected constructor for subclasses that want to provide their own CvSink. Used by
      * DuplicateFrameProvider to create a unique CvSink and avoid CameraServer caching.
@@ -64,10 +59,6 @@ public class USBFrameProvider extends CpuImageProcessor {
 
         this.settables = visionSettables;
 
-        var useNewBehaviorTopic =
-                NetworkTablesManager.getInstance().kRootTable.getBooleanTopic("use_new_cscore_frametime");
-
-        useNewBehaviorSub = useNewBehaviorTopic.subscribe(false);
         this.connectedCallback = connectedCallback;
     }
 
@@ -102,7 +93,7 @@ public class USBFrameProvider extends CpuImageProcessor {
             onCameraConnected();
         }
 
-        if (!useNewBehaviorSub.get()) {
+        if (m_blockForFrames) {
             // We allocate memory so we don't fill a Mat in use by another thread (memory model is easier)
             var mat = new CVMat();
             // This is from wpi::Now, or WPIUtilJNI.now(). The epoch from grabFrame is uS since
