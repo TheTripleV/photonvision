@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Predicate;
@@ -154,7 +155,7 @@ public class VisionSourceManager {
             return false;
         }
 
-        // Check if the camera is already in use by another module
+        // Check if the camera is already in use by another module (by uniquePath)
         if (vmm.getModules().stream()
                 .anyMatch(
                         module ->
@@ -166,6 +167,28 @@ public class VisionSourceManager {
             logger.error(
                     "Camera unique-path already in use by active VisionModule! Cannot reactivate "
                             + deactivatedConfig.get().nickname);
+            this.disabledCameraConfigs.put(uniqueName, deactivatedConfig.get());
+            return false;
+        }
+
+        // Secondary guard: check by raw path() to catch cases where uniquePath differs
+        // (e.g. different dev index) but the underlying device path is the same
+        if (vmm.getModules().stream()
+                .anyMatch(
+                        module ->
+                                module
+                                        .getCameraConfiguration()
+                                        .matchedCameraInfo
+                                        .path()
+                                        .equals(deactivatedConfig.get().matchedCameraInfo.path()))) {
+            logger.error(
+                    "Camera raw path '"
+                            + deactivatedConfig.get().matchedCameraInfo.path()
+                            + "' already in use by an active VisionModule! "
+                            + "Cannot reactivate "
+                            + deactivatedConfig.get().nickname);
+            this.disabledCameraConfigs.put(uniqueName, deactivatedConfig.get());
+            return false;
         }
 
         // transform the camera info all the way to a VisionModule and then start it
@@ -204,7 +227,7 @@ public class VisionSourceManager {
      * @param cameraInfo
      */
     public synchronized boolean assignUnmatchedCamera(PVCameraInfo cameraInfo) {
-        // Check if the camera is already in use by another module
+        // Check if the camera is already in use by another module (by uniquePath)
         if (vmm.getModules().stream()
                 .anyMatch(
                         module ->
@@ -215,6 +238,25 @@ public class VisionSourceManager {
                                         .equals(cameraInfo.uniquePath()))) {
             logger.error(
                     "Camera unique-path already in use by active VisionModule! Cannot add " + cameraInfo);
+            return false;
+        }
+
+        // Secondary guard: check by raw path() to catch cases where uniquePath differs
+        // (e.g. different dev index on macOS) but the underlying device path is the same
+        if (vmm.getModules().stream()
+                .anyMatch(
+                        module ->
+                                module
+                                        .getCameraConfiguration()
+                                        .matchedCameraInfo
+                                        .path()
+                                        .equals(cameraInfo.path()))) {
+            logger.error(
+                    "Camera raw path '"
+                            + cameraInfo.path()
+                            + "' already in use by an active VisionModule! "
+                            + "This camera appears to be the same physical device. Cannot add "
+                            + cameraInfo);
             return false;
         }
 
@@ -302,6 +344,49 @@ public class VisionSourceManager {
                 .filter(c -> !(String.join("", c.otherPaths()).contains("csi-video")))
                 .filter(c -> !c.name().equals("unicam"))
                 .forEach(cameraInfos::add);
+
+        // Deduplicate by raw path. On macOS, cscore can occasionally return the same
+        // physical camera more than once during hot-plug events.
+        {
+            var seenPaths = new HashSet<String>();
+            var deduplicated = new ArrayList<PVCameraInfo>();
+            for (var cam : cameraInfos) {
+                if (seenPaths.add(cam.path())) {
+                    deduplicated.add(cam);
+                } else {
+                    logger.warn(
+                            "Filtered duplicate camera path '"
+                                    + cam.path()
+                                    + "' (name='"
+                                    + cam.name()
+                                    + "') from enumeration results");
+                }
+            }
+            cameraInfos = deduplicated;
+        }
+
+        // Log uniquePath collision detection for debugging
+        {
+            var uniquePaths = new HashMap<String, List<PVCameraInfo>>();
+            for (var cam : cameraInfos) {
+                uniquePaths.computeIfAbsent(cam.uniquePath(), k -> new ArrayList<>()).add(cam);
+            }
+            for (var entry : uniquePaths.entrySet()) {
+                if (entry.getValue().size() > 1) {
+                    logger.error(
+                            "DUPLICATE uniquePath detected: '"
+                                    + entry.getKey()
+                                    + "' shared by "
+                                    + entry.getValue().size()
+                                    + " cameras: "
+                                    + entry.getValue().stream()
+                                            .map(PVCameraInfo::name)
+                                            .toList()
+                                    + ". This WILL cause feed duplication!");
+                }
+            }
+        }
+
         if (LoadJNI.hasLoaded(JNITypes.LIBCAMERA)) {
             // find all CSI cameras (Raspberry Pi cameras)
             Stream.of(LibCameraJNI.getCameraNames())
@@ -442,6 +527,17 @@ public class VisionSourceManager {
                                     + device.name()
                                     + "\" at \""
                                     + device.path());
+                } else if (usbDevice.otherPaths.length == 0
+                        && platform.osType == OSType.MACOS) {
+                    // On macOS with older cscore, empty otherPaths is expected.
+                    // Log for diagnostics but allow the device through.
+                    logger.debug(
+                            "macOS USB camera with empty otherPaths (expected): \""
+                                    + device.name()
+                                    + "\" at \""
+                                    + device.path()
+                                    + "\"");
+                    valid = true;
                 } else if (Arrays.stream(usbDevice.otherPaths).anyMatch(it -> it.contains("csi-video"))
                         || usbDevice.name().equals("unicam")) {
                     logger.trace(

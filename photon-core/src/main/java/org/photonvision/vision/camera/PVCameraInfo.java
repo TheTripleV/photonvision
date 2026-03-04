@@ -111,12 +111,35 @@ public sealed interface PVCameraInfo {
 
         @Override
         public String uniquePath() {
-            return Arrays.stream(super.otherPaths)
-                    .sorted() // Must sort to ensure a consistent unique path as we can get more than one
-                    // by-path and their order changes at random?
-                    .filter(path -> path.contains("/by-path/"))
-                    .findFirst()
-                    .orElse(path());
+            // On Linux, prefer /by-path/ entries which encode the physical USB port
+            var byPathResult =
+                    Arrays.stream(super.otherPaths)
+                            .sorted() // Must sort to ensure a consistent unique path as we can get more
+                            // than one by-path and their order changes at random?
+                            .filter(path -> path.contains("/by-path/"))
+                            .findFirst();
+            if (byPathResult.isPresent()) {
+                return byPathResult.get();
+            }
+
+            // On macOS with updated cscore, look for the usb-location: entry which
+            // encodes the physical USB port topology via IOKit locationID
+            var usbLocationResult =
+                    Arrays.stream(super.otherPaths)
+                            .filter(path -> path.startsWith("usb-location:"))
+                            .findFirst();
+            if (usbLocationResult.isPresent()) {
+                return usbLocationResult.get();
+            }
+
+            // Fallback: on macOS with older cscore (no otherPaths, no VID/PID),
+            // append the dev index to disambiguate identical cameras
+            if (super.otherPaths.length == 0 && super.vendorId <= 0 && super.productId <= 0) {
+                return path() + "::dev" + super.dev;
+            }
+
+            // Windows or other platforms: path alone
+            return path();
         }
 
         @Override

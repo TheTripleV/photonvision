@@ -19,6 +19,7 @@ package org.photonvision.vision.processes;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import edu.wpi.first.cscore.UsbCameraInfo;
@@ -325,5 +326,184 @@ public class VisionSourceManagerTest {
         assertFalse(vsm.getVisionModules().stream().anyMatch(m -> m.mismatch));
 
         vsm.teardown();
+    }
+
+    // --- macOS camera deduplication tests ---
+
+    @Test
+    public void testMacOSIdenticalCamerasOldCscoreGetDistinctUniquePaths() {
+        // Simulate old macOS cscore output: empty otherPaths, vendorId/productId = -1
+        // Two identical cameras with same AVFoundation uniqueID (collision scenario)
+        var cam1 =
+                PVCameraInfo.fromUsbCameraInfo(
+                        new UsbCameraInfo(0, "0x1234abcd0000", "USB Camera", new String[] {}, -1, -1));
+        var cam2 =
+                PVCameraInfo.fromUsbCameraInfo(
+                        new UsbCameraInfo(1, "0x1234abcd0000", "USB Camera", new String[] {}, -1, -1));
+
+        // With old cscore (no VID/PID, no otherPaths), uniquePath falls back to
+        // path + "::dev" + index, so they should be distinct
+        assertNotEquals(cam1.uniquePath(), cam2.uniquePath());
+        assertEquals("0x1234abcd0000::dev0", cam1.uniquePath());
+        assertEquals("0x1234abcd0000::dev1", cam2.uniquePath());
+    }
+
+    @Test
+    public void testMacOSIdenticalCamerasNewCscoreGetDistinctUniquePaths() {
+        // Simulate new macOS cscore output: otherPaths populated with usb-location,
+        // VID/PID populated. Two cameras at different USB ports.
+        var cam1 =
+                PVCameraInfo.fromUsbCameraInfo(
+                        new UsbCameraInfo(
+                                0,
+                                "0x1234abcd0000",
+                                "USB Camera",
+                                new String[] {
+                                    "modelID:UVC Camera VendorID_1234 ProductID_5678",
+                                    "usb-location:0x14100000-vid1234-pid5678"
+                                },
+                                1234,
+                                5678));
+        var cam2 =
+                PVCameraInfo.fromUsbCameraInfo(
+                        new UsbCameraInfo(
+                                1,
+                                "0x5678efab0000",
+                                "USB Camera",
+                                new String[] {
+                                    "modelID:UVC Camera VendorID_1234 ProductID_5678",
+                                    "usb-location:0x14200000-vid1234-pid5678"
+                                },
+                                1234,
+                                5678));
+
+        // With new cscore, uniquePath uses usb-location: which encodes physical port
+        assertNotEquals(cam1.uniquePath(), cam2.uniquePath());
+        assertEquals("usb-location:0x14100000-vid1234-pid5678", cam1.uniquePath());
+        assertEquals("usb-location:0x14200000-vid1234-pid5678", cam2.uniquePath());
+    }
+
+    @Test
+    public void testMacOSCamerasDifferentPathsAreDistinct() {
+        // Simulate macOS cameras with different AVFoundation uniqueIDs (different ports)
+        // but old cscore (no VID/PID). These should be distinct even without the dev fix.
+        var cam1 =
+                PVCameraInfo.fromUsbCameraInfo(
+                        new UsbCameraInfo(0, "0x14100000_unique1", "USB Camera", new String[] {}, -1, -1));
+        var cam2 =
+                PVCameraInfo.fromUsbCameraInfo(
+                        new UsbCameraInfo(1, "0x14200000_unique2", "USB Camera", new String[] {}, -1, -1));
+
+        // Different paths => different uniquePaths even with old cscore
+        assertNotEquals(cam1.uniquePath(), cam2.uniquePath());
+    }
+
+    @Test
+    public void testLinuxUniquePathUnchanged() {
+        // Verify Linux behavior is unaffected: /by-path/ entry should be used
+        var cam =
+                PVCameraInfo.fromUsbCameraInfo(
+                        new UsbCameraInfo(
+                                0,
+                                "/dev/video0",
+                                "Lifecam HD-3000",
+                                new String[] {
+                                    "/dev/v4l/by-id/usb-Microsoft_LifeCam-video-index0",
+                                    "/dev/v4l/by-path/platform-xhci-hcd.0-usb-0:1.3:1.0-video-index0"
+                                },
+                                5940,
+                                5940));
+
+        assertEquals(
+                "/dev/v4l/by-path/platform-xhci-hcd.0-usb-0:1.3:1.0-video-index0", cam.uniquePath());
+    }
+
+    @Test
+    public void testWindowsUniquePathUnchanged() {
+        // Verify Windows behavior: path is used when otherPaths is empty but VID/PID > 0
+        var cam =
+                PVCameraInfo.fromUsbCameraInfo(
+                        new UsbCameraInfo(
+                                0,
+                                "\\\\?\\usb#vid_045e&pid_0779#12345",
+                                "Lifecam HD-3000",
+                                new String[] {},
+                                0x045e,
+                                0x0779));
+
+        // VID/PID > 0 so macOS fallback doesn't trigger, just returns path()
+        assertEquals("\\\\?\\usb#vid_045e&pid_0779#12345", cam.uniquePath());
+    }
+
+    @Test
+    public void testAssignDuplicateRawPathBlocked() throws InterruptedException, IOException {
+        // Test that assigning a camera with the same raw path as an already-active
+        // camera is blocked (even if uniquePaths differ due to dev index)
+
+        // Use file cameras since we can't create real USB cameras in tests
+        var fileCamera1 =
+                PVCameraInfo.fromFileInfo(
+                        TestUtils.getApriltagImagePath(TestUtils.ApriltagTestImages.kTag1_640_480, false)
+                                .toAbsolutePath()
+                                .toString(),
+                        "DuplicateTest");
+
+        vsm.testCameras = List.of(fileCamera1);
+        vsm.registerLoadedConfigs(List.of());
+
+        // First assignment should succeed
+        assertTrue(vsm.assignUnmatchedCamera(fileCamera1));
+        assertEquals(1, vsm.vmm.getModules().size());
+
+        // Create a second camera with the same path (simulating duplication)
+        var fileCamera2 =
+                PVCameraInfo.fromFileInfo(
+                        TestUtils.getApriltagImagePath(TestUtils.ApriltagTestImages.kTag1_640_480, false)
+                                .toAbsolutePath()
+                                .toString(),
+                        "DuplicateTest");
+
+        // Second assignment should be blocked (same raw path)
+        assertFalse(vsm.assignUnmatchedCamera(fileCamera2));
+        assertEquals(1, vsm.vmm.getModules().size());
+    }
+
+    @Test
+    public void testReactivateDuplicatePathBlocked() throws InterruptedException {
+        // Test that reactivating a camera is blocked when its path matches
+        // an already-active camera
+
+        var fileCamera1 =
+                PVCameraInfo.fromFileInfo(
+                        TestUtils.getApriltagImagePath(TestUtils.ApriltagTestImages.kTag1_640_480, false)
+                                .toAbsolutePath()
+                                .toString(),
+                        "Camera1");
+        var fileCamera2 =
+                PVCameraInfo.fromFileInfo(
+                        TestUtils.getApriltagImagePath(TestUtils.ApriltagTestImages.kTag1_640_480, false)
+                                .toAbsolutePath()
+                                .toString(),
+                        "Camera1");
+
+        // Set up: one active, one disabled (same path)
+        CameraConfiguration conf1 = new CameraConfiguration(fileCamera1);
+        conf1.deactivated = false;
+        conf1.nickname = "Active";
+
+        CameraConfiguration conf2 = new CameraConfiguration(fileCamera2);
+        conf2.deactivated = true;
+        conf2.nickname = "Disabled";
+        conf2.uniqueName = conf1.uniqueName + "_dup";
+
+        vsm.testCameras = List.of(fileCamera1, fileCamera2);
+        vsm.registerLoadedConfigs(List.of(conf1, conf2));
+
+        assertEquals(1, vsm.vmm.getModules().size());
+        assertEquals(1, vsm.getVsmState().disabledConfigs.size());
+
+        // Reactivating the disabled camera should fail (same raw path as active)
+        assertFalse(vsm.reactivateDisabledCameraConfig(conf2.uniqueName));
+        assertEquals(1, vsm.vmm.getModules().size());
     }
 }
